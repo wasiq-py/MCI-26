@@ -1,0 +1,8 @@
+# Whitelist: ignore everything, then allow only source/text files
+*
+!*/
+!*.c
+!*.h
+!*.txt
+!.gitignore
+!README.md

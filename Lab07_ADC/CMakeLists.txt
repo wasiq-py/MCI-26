@@ -37,6 +37,10 @@ add_executable(${CMAKE_PROJECT_NAME})
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
+# CMSIS-DSP from the installed STM32Cube F3 package
+set(CUBE_F3 "C:/Users/DELL/STM32Cube/Repository/STM32Cube_FW_F3_V1.11.6")
+set(DSP_DIR ${CUBE_F3}/Drivers/CMSIS/DSP)
+
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
@@ -45,16 +49,20 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
+    ${DSP_DIR}/Source/StatisticsFunctions/arm_mean_f32.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
+    ${DSP_DIR}/Include
 )
 
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
+    ARM_MATH_CM4
+    __FPU_PRESENT=1
 )
 
 # Remove wrong libob.a library dependency when using cpp files

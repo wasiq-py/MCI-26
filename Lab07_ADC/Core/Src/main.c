@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
+#include "arm_math.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -69,11 +70,32 @@ static void MX_USB_PCD_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-char msg[50];        // text to send
-int adcValue = 0;    // ADC reading (0 to 4095)
-float voltage = 0;   // voltage (0 to 3.3 V)
-/* USER CODE END 0 */
+int task = 1;            // 1 = Task 1 (pot), 2 = Task 2 (filter)
 
+char msg[50];            // text to send
+int adcValue = 0;        // ADC reading (0 to 4095)
+float voltage = 0;       // raw voltage
+float filtered = 0;      // filtered voltage
+
+float buffer[10];        // last 10 samples
+int sampleIndex = 0;     // where to store the next sample
+
+// Put the new sample in the buffer and return the average of the last 10
+float movingAverage(float newSample)
+{
+  float result;
+
+  buffer[sampleIndex] = newSample;     // overwrite the oldest sample
+  sampleIndex = sampleIndex + 1;
+  if (sampleIndex >= 10)
+  {
+    sampleIndex = 0;                   // go back to the start
+  }
+
+  arm_mean_f32(buffer, 10, &result);   // CMSIS-DSP average
+  return result;
+}
+/* USER CODE END 0 */
 /**
   * @brief  The application entry point.
   * @retval int
@@ -120,27 +142,30 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    // Step 1: start the ADC
+    // Read the ADC (same for both tasks)
     HAL_ADC_Start(&hadc1);
-
-    // Step 2: wait until conversion is done
     HAL_ADC_PollForConversion(&hadc1, 100);
-
-    // Step 3: read the value
     adcValue = HAL_ADC_GetValue(&hadc1);
-
-    // Step 4: stop the ADC
     HAL_ADC_Stop(&hadc1);
 
-    // Step 5: convert to voltage
+    // Convert to voltage
     voltage = adcValue * 3.3 / 4095;
 
-    // Step 6: make the text and send it over UART
-    sprintf(msg, "ADC = %d   Voltage = %.2f V\r\n", adcValue, voltage);
-    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 100);
-
-    // Step 7: wait 200 ms
-    HAL_Delay(200);
+    if (task == 1)
+    {
+      // ---------- Task 1: potentiometer, print text ----------
+      sprintf(msg, "ADC = %d   Voltage = %.2f V\r\n", adcValue, voltage);
+      HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 100);
+      HAL_Delay(200);
+    }
+    else
+    {
+      // ---------- Task 2: filter, print raw,filtered ----------
+      filtered = movingAverage(voltage);
+      sprintf(msg, "%.3f,%.3f\n", voltage, filtered);
+      HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 100);
+      HAL_Delay(2);
+    }
   }
   /* USER CODE END 3 */
 }

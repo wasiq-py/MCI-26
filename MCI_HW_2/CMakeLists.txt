@@ -19,7 +19,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Set the project name
-set(CMAKE_PROJECT_NAME MCI_HW_2)
+set(CMAKE_PROJECT_NAME hw02_samee_wasiq)
 
 # Enable compile command to ease indexing with e.g. clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
@@ -44,9 +44,12 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    Core/Src/clock.c
-    Core/Src/uart.c
     # Add user sources here
+    Core/Src/clock.c
+    Core/Src/timer.c
+    Core/Src/adc.c
+    Core/Src/led.c
+    Core/Src/uart.c
 )
 
 # Add include paths

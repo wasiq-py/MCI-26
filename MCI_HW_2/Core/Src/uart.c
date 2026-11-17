@@ -4,7 +4,7 @@
  * USART1's transmit pin is PC4. Format: 8 data bits, no parity, 1 stop bit.
  */
 #include "uart.h"
-#include "clock.h"            /* gives PCLK2_HZ = the clock that feeds USART1 */
+#include "clock.h"            /* gives CLOCK_APB2_HZ = the clock that feeds USART1 (64 MHz) */
 #include "stm32f303xc.h"
 
 void uart_init(uint32_t baud)
@@ -26,7 +26,7 @@ void uart_init(uint32_t baud)
 
     /* BRR sets the speed. Formula: BRR = USART clock / baud rate.
        Example: 64,000,000 / 230,400 = 277.78, rounded to 278 (error is only 0.08 %). */
-    USART1->BRR = (PCLK2_HZ + (baud / 2)) / baud;  /* "+ baud/2" makes it round instead of cut off */
+    USART1->BRR = (CLOCK_APB2_HZ + (baud / 2)) / baud;  /* "+ baud/2" makes it round instead of cut off */
 
     /* STEP 4: Switch it on. */
     USART1->CR1 |= USART_CR1_TE;                   /* TE = transmitter enable */

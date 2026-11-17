@@ -1,67 +1,120 @@
-/* main.c - BRING-UP TEST (temporary).
+/* main.c - HW2 real-time oscilloscope, STM32F3 Discovery, CMSIS register level only.
  *
- * Goal: check that the UART works, before the real ADC code exists.
- * It sends a fake signal (a ramp that counts 0, 1, 2 ... 4095, then starts again)
- * in the same format the real oscilloscope will use. Look at it on the PC (COM port).
- *
- * FORMAT ON THE WIRE
- *   A sample is a 12-bit number (0..4095) sent as 2 bytes:
- *       byte 1 = 1 + the upper 6 bits   (starts with a 1, so the PC can find the start)
- *       byte 2 = 0 + the lower 6 bits   (starts with a 0)
- *   A status report is 3 bytes: a type (0xC0 or 0xC1), then the value in two 7-bit pieces.
+ * Data path: TIM6 TRGO (10 kHz) -> ADC1 PA0 -> EOC ISR -> ring buffer -> main loop -> USART1 -> PC
+ * Status:    green LED (PE15) blinks once per second while exactly 10,000 samples/s are taken
+ *            and nothing is lost; red LED (PE9) latches on at the first missed/dropped sample.
+ * Part A task 4: analyze() measures Vpp and frequency on the board; read them in Live Watch.
  */
 #include "stm32f303xc.h"
 #include "clock.h"
+#include "timer.h"
+#include "adc.h"
 #include "uart.h"
+#include "led.h"
+#include "protocol.h"
 
-/* Sends one sample (a number from 0 to 4095). */
-static void send_sample(uint16_t sample)
+#define SAMPLE_RATE_HZ   10000U
+#define UART_BAUD        230400U
+#define WINDOW           1000U      /* analyze 1000 samples = 0.1 s at a time */
+
+/* Visible in the debugger (Live Watch) */
+volatile uint32_t samples_last_second;
+volatile uint32_t lost_samples;
+volatile uint16_t last_sample;
+volatile uint32_t g_vpp_mV;         /* peak-to-peak voltage in mV */
+volatile uint32_t g_freq_dHz;       /* frequency in 0.1 Hz (5003 = 500.3 Hz) */
+
+static volatile uint32_t s_second_flag;
+static uint32_t s_prev_total;
+
+/* Runs in the SysTick ISR exactly every 1000 ms */
+static void on_second(void)
 {
-    uint8_t bytes[2];
-
-    /* sample >> 6 means "throw away the lower 6 bits", which leaves the upper 6 bits.
-       0x80 is binary 10000000, so OR-ing it sets the first bit to 1. */
-    bytes[0] = 0x80 | (sample >> 6);
-
-    /* sample & 0x3F means "keep only the lower 6 bits" (0x3F = binary 00111111). */
-    bytes[1] = sample & 0x3F;
-
-    uart_write(bytes, 2);
+    uint32_t total = adc_total_samples();
+    samples_last_second = total - s_prev_total;
+    s_prev_total = total;
+    s_second_flag = 1;
 }
 
-/* Sends one status report. type = 0xC0 (samples counted) or 0xC1 (samples lost). */
-static void send_status(uint8_t type, uint16_t value)
+/* Collects WINDOW samples, then works out Vpp and frequency.
+ * Vpp:  (max - min) * 3300 / 4095.
+ * Freq: count upward crossings of the midpoint; f = (crossings - 1) / (time first->last crossing).
+ *       Each sample is 0.1 ms apart, so time is measured in samples. */
+static void analyze(uint16_t s)
 {
-    uint8_t bytes[3];
+    static uint16_t buf[WINDOW];
+    static uint32_t n;
 
-    bytes[0] = type;
-    bytes[1] = (value >> 7) & 0x7F;      /* upper part of the value (7 bits) */
-    bytes[2] = value & 0x7F;             /* lower part of the value (7 bits) */
+    buf[n++] = s;
+    if (n < WINDOW) return;
+    n = 0;
 
-    uart_write(bytes, 3);
+    uint16_t min = 4095, max = 0;
+    for (uint32_t i = 0; i < WINDOW; i++) {
+        if (buf[i] < min) min = buf[i];
+        if (buf[i] > max) max = buf[i];
+    }
+    g_vpp_mV = ((uint32_t)(max - min) * 3300U) / 4095U;
+
+    uint16_t mid  = (uint16_t)((min + max) / 2U);
+    uint16_t hyst = (uint16_t)((max - min) / 8U);   /* ignore noise near the midpoint */
+    uint32_t crossings = 0, first = 0, last = 0, high = (buf[0] > mid);
+
+    for (uint32_t i = 1; i < WINDOW; i++) {
+        if (!high && buf[i] > mid + hyst) {          /* upward crossing */
+            high = 1;
+            if (crossings == 0) first = i;
+            last = i;
+            crossings++;
+        } else if (high && buf[i] < mid - hyst) {
+            high = 0;
+        }
+    }
+
+    if (crossings >= 2 && (uint32_t)(max - min) > 40U)
+        g_freq_dHz = ((crossings - 1U) * SAMPLE_RATE_HZ * 10U) / (last - first);
+    else
+        g_freq_dHz = 0;                              /* flat signal, no frequency */
 }
 
 int main(void)
 {
-    uint16_t sample = 0;                 /* the fake signal value, goes 0..4095 */
-    uint32_t count = 0;                  /* how many samples we have sent so far */
+    clock_init();
+    led_init();
+    uart_init(UART_BAUD);
+    adc_init();                                 /* armed, waits for TIM6 trigger */
+    timer_sample_clock_init(SAMPLE_RATE_HZ);
+    timer_pwm_test_init(1000U, 50U);            /* optional self-test: jumper PA6 -> PA0 */
 
-    clock_init();                        /* run the chip at 64 MHz */
-    uart_init(230400);                   /* start the UART at 230400 baud */
+    clock_set_second_callback(on_second);
+    timer_sample_clock_start();                 /* sampling starts here */
 
-    while (1) {
-        send_sample(sample);             /* send the current value */
+    for (;;) {
+        uint16_t s;
+        uint8_t frame[3];
 
-        sample = sample + 1;             /* next value of the ramp */
-        if (sample > 4095) {
-            sample = 0;                  /* after 4095, start again from 0 */
+        if (adc_buffer_pop(&s)) {
+            last_sample = s;
+            analyze(s);
+            proto_encode_sample(s, frame);
+            uart_write(frame, 2);
         }
 
-        count = count + 1;
-        if (count == 10000) {            /* every 10,000 samples (stands in for "once a second") */
-            send_status(0xC0, 10000);    /* report: 10000 samples counted */
-            send_status(0xC1, 0);        /* report: 0 samples lost */
-            count = 0;
+        if (s_second_flag) {
+            s_second_flag = 0;
+            lost_samples = adc_overruns() + adc_dropped_samples();
+
+            proto_encode_status(PROTO_STATUS_RATE, samples_last_second, frame);
+            uart_write(frame, 3);
+            proto_encode_status(PROTO_STATUS_LOST, lost_samples, frame);
+            uart_write(frame, 3);
+
+            if (samples_last_second == SAMPLE_RATE_HZ && lost_samples == 0U) {
+                led_toggle(LED_GREEN);
+            } else {
+                led_off(LED_GREEN);
+            }
+            if (lost_samples != 0U) led_on(LED_RED);
         }
     }
 }
